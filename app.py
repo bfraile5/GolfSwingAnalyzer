@@ -180,10 +180,19 @@ class App:
             elif e == "REPLAY":
                 if self._screen._player:
                     self._screen._player.reset()
-            elif e in ("SPEED_HALF",):
+            elif e == "PLAY_PAUSE":
+                if self._screen._player:
+                    self._screen._player.toggle_play()
+            elif e == "STEP_FORWARD":
+                if self._screen._player:
+                    self._screen._player.step_forward()
+            elif e == "STEP_BACK":
+                if self._screen._player:
+                    self._screen._player.step_back()
+            elif e == "SPEED_HALF":
                 if self._screen._player:
                     self._screen._player.set_speed(0.5)
-            elif e in ("SPEED_NORM",):
+            elif e == "SPEED_NORM":
                 if self._screen._player:
                     self._screen._player.set_speed(1.0)
             elif e == "NEW_SWING":

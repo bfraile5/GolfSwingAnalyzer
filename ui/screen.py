@@ -2,7 +2,6 @@
 from __future__ import annotations
 import math
 import time
-import threading
 import pygame
 import numpy as np
 import cv2
@@ -29,27 +28,22 @@ class Screen:
                 (config.DISPLAY_WIDTH, config.DISPLAY_HEIGHT), flags
             )
         except Exception:
-            # Fall back to windowed if fullscreen fails
             self.surface = pygame.display.set_mode(
                 (config.DISPLAY_WIDTH, config.DISPLAY_HEIGHT)
             )
 
-        self._clock = pygame.time.Clock()
-        self._fonts = _load_fonts()
+        self._clock  = pygame.time.Clock()
+        self._fonts  = _load_fonts()
 
-        # State for review mode
-        self._player: VideoPlayer | None = None
-        self._metrics_panel: MetricsPanel | None = None
+        # Review-mode objects
+        self._player:         VideoPlayer  | None = None
+        self._metrics_panel:  MetricsPanel | None = None
         self._controls = ControlBar(self.surface, self._fonts)
 
         # Buffering view state
         self._record_pulse = 0.0
-        self._audio_level = 0.0
 
     # ── Public API ─────────────────────────────────────────────────────────────
-
-    def set_audio_level(self, level: float) -> None:
-        self._audio_level = level
 
     def load_review(self, report) -> None:
         """Prepare video player and metrics panel from a SwingReport."""
@@ -57,19 +51,18 @@ class Screen:
             report.frames_cam0,
             report.frames_cam2,
             report.phases,
+            swing_analysis=report.swing_analysis,
+            fonts=self._fonts,
         )
         self._metrics_panel = MetricsPanel(report.metrics, self._fonts)
 
     def render_splash(self) -> list[str]:
-        """Render startup/idle screen. Returns list of event names."""
         self.surface.fill(config.COLOR_BG)
         self._draw_header("Golf Swing Analyzer", "READY", None)
-        msg = "Preparing cameras..."
-        font = self._fonts["large"]
-        surf = font.render(msg, True, config.COLOR_TEXT_DIM)
-        x = (config.DISPLAY_WIDTH - surf.get_width()) // 2
-        y = config.DISPLAY_HEIGHT // 2 - surf.get_height() // 2
-        self.surface.blit(surf, (x, y))
+        msg  = self._fonts["large"].render("Preparing cameras…", True, config.COLOR_TEXT_DIM)
+        x    = (config.DISPLAY_WIDTH  - msg.get_width())  // 2
+        y    = config.DISPLAY_HEIGHT // 2 - msg.get_height() // 2
+        self.surface.blit(msg, (x, y))
         pygame.display.flip()
         self._clock.tick(config.RENDER_FPS)
         return self._drain_events()
@@ -80,7 +73,6 @@ class Screen:
         frame2: np.ndarray | None,
         audio_available: bool,
     ) -> list[str]:
-        """Render live preview + buffering status."""
         self.surface.fill(config.COLOR_BG)
         self._draw_header("Golf Swing Analyzer", "RECORDING", config.COLOR_RECORD_DOT)
         self._draw_dual_preview(frame0, frame2)
@@ -92,7 +84,6 @@ class Screen:
         return self._drain_events()
 
     def render_analyzing(self, progress: float) -> list[str]:
-        """Render analysis progress screen."""
         self.surface.fill(config.COLOR_BG)
         self._draw_header("Golf Swing Analyzer", "ANALYZING", config.COLOR_WARN)
         self._draw_analyzing_overlay(progress)
@@ -101,25 +92,41 @@ class Screen:
         return self._drain_events()
 
     def render_review(self, dt_ms: float) -> list[str]:
-        """Render results screen with video playback and metrics."""
+        """Render review screen — dual video + timeline + P-detail + metrics."""
         self.surface.fill(config.COLOR_BG)
 
         if self._player:
             self._player.update(dt_ms)
-            overall = None
-            if self._metrics_panel:
-                overall = self._metrics_panel.metrics.overall_score
             phase = self._player.current_phase
-            self._draw_header("Golf Swing Analyzer", f"PHASE: {phase.upper()}", config.COLOR_ACCENT)
+            self._draw_header(
+                "Golf Swing Analyzer",
+                f"REVIEW  —  {phase.upper()}",
+                config.COLOR_ACCENT,
+            )
             self._player.draw(self.surface)
 
         if self._metrics_panel:
             self._metrics_panel.draw(self.surface)
 
-        events = self._controls.draw_review(self.surface)
+        self._controls.draw_review(self.surface)
+
         pygame.display.flip()
         self._clock.tick(config.RENDER_FPS)
-        return self._drain_events() + events
+
+        # Drain ALL events once, then distribute
+        raw_events = pygame.event.get()
+
+        # Buttons
+        button_events = self._controls.handle_review_events(raw_events)
+
+        # Timeline scrub
+        if self._player:
+            self._player.handle_events(raw_events)
+
+        # Keyboard
+        kb_events = self._extract_review_kb_events(raw_events)
+
+        return kb_events + button_events
 
     def quit(self) -> None:
         pygame.quit()
@@ -135,20 +142,21 @@ class Screen:
             (config.DISPLAY_WIDTH, config.HEADER_HEIGHT - 1), 1
         )
 
-        # Title
         title_surf = self._fonts["title"].render(title, True, config.COLOR_TEXT)
-        self.surface.blit(title_surf, (20, (config.HEADER_HEIGHT - title_surf.get_height()) // 2))
+        self.surface.blit(
+            title_surf,
+            (20, (config.HEADER_HEIGHT - title_surf.get_height()) // 2)
+        )
 
-        # Status badge
         if status_color is None:
             status_color = config.COLOR_TEXT_DIM
         status_surf = self._fonts["medium"].render(status, True, status_color)
         sx = config.DISPLAY_WIDTH - status_surf.get_width() - 20
         sy = (config.HEADER_HEIGHT - status_surf.get_height()) // 2
 
-        # Pulsing dot before status
+        # Pulsing dot for RECORDING state
         if status_color == config.COLOR_RECORD_DOT:
-            alpha = int(128 + 127 * math.sin(self._record_pulse))
+            alpha    = int(128 + 127 * math.sin(self._record_pulse))
             dot_surf = pygame.Surface((12, 12), pygame.SRCALPHA)
             pygame.draw.circle(dot_surf, (*config.COLOR_RECORD_DOT, alpha), (6, 6), 6)
             self.surface.blit(dot_surf, (sx - 20, sy + 4))
@@ -158,36 +166,38 @@ class Screen:
     def _draw_dual_preview(
         self, frame0: np.ndarray | None, frame2: np.ndarray | None
     ) -> None:
+        """Live dual-camera preview used in BUFFERING state."""
         y_start = config.HEADER_HEIGHT
-        cell_w = config.VIDEO_CELL_WIDTH
-        cell_h = config.VIDEO_AREA_HEIGHT
+        cell_w  = config.VIDEO_CELL_WIDTH
+        cell_h  = config.VIDEO_AREA_HEIGHT
 
         for i, (frame, label) in enumerate(
             [(frame0, "Face-On"), (frame2, "Down-the-Line")]
         ):
-            cell_x = i * cell_w
+            cell_x    = i * cell_w
             cell_rect = pygame.Rect(cell_x, y_start, cell_w, cell_h)
             pygame.draw.rect(self.surface, config.COLOR_PANEL, cell_rect)
 
             if frame is not None:
                 pg_surf = _bgr_to_pygame(frame, config.VIDEO_DISPLAY_WIDTH, config.VIDEO_DISPLAY_HEIGHT)
-                fx = cell_x + (cell_w - config.VIDEO_DISPLAY_WIDTH) // 2
+                fx = cell_x + (cell_w - config.VIDEO_DISPLAY_WIDTH)  // 2
                 fy = y_start + (cell_h - config.VIDEO_DISPLAY_HEIGHT) // 2
                 self.surface.blit(pg_surf, (fx, fy))
             else:
-                # No camera — show placeholder
-                no_cam = self._fonts["medium"].render(f"No {label} Camera", True, config.COLOR_TEXT_DIM)
+                no_cam = self._fonts["medium"].render(
+                    f"No {label} Camera", True, config.COLOR_TEXT_DIM
+                )
                 self.surface.blit(
                     no_cam,
                     (cell_x + (cell_w - no_cam.get_width()) // 2,
-                     y_start + cell_h // 2)
+                     y_start + cell_h // 2),
                 )
 
-            # Label at top of cell
-            lbl = self._fonts["small"].render(f"CAM {i+1} — {label}", True, config.COLOR_TEXT_DIM)
+            lbl = self._fonts["small"].render(
+                f"CAM {i + 1} — {label}", True, config.COLOR_TEXT_DIM
+            )
             self.surface.blit(lbl, (cell_x + 10, y_start + 8))
 
-        # Divider
         pygame.draw.line(
             self.surface, config.COLOR_BORDER,
             (cell_w, y_start), (cell_w, y_start + cell_h), 1
@@ -200,68 +210,76 @@ class Screen:
         else:
             msg = "No audio device detected   |   Press SPACE to trigger manually"
         surf = self._fonts["small"].render(msg, True, config.COLOR_TEXT_DIM)
-        x = (config.DISPLAY_WIDTH - surf.get_width()) // 2
+        x    = (config.DISPLAY_WIDTH - surf.get_width()) // 2
         self.surface.blit(surf, (x, y))
 
-        # Audio level bar (only if available)
         if audio_available:
-            bar_w = 300
-            bar_h = 8
-            bx = (config.DISPLAY_WIDTH - bar_w) // 2
-            by = y + surf.get_height() + 8
-            pygame.draw.rect(self.surface, config.COLOR_BORDER, (bx, by, bar_w, bar_h), border_radius=4)
-            fill_w = int(bar_w * min(1.0, self._audio_level / 0.3))
-            color = config.COLOR_GOOD if self._audio_level < 0.12 else config.COLOR_WARN
-            if fill_w > 0:
-                pygame.draw.rect(self.surface, color, (bx, by, fill_w, bar_h), border_radius=4)
+            bar_w  = 300
+            bar_h  = 8
+            bx     = (config.DISPLAY_WIDTH - bar_w) // 2
+            by     = y + surf.get_height() + 8
+            pygame.draw.rect(self.surface, config.COLOR_BORDER,
+                             (bx, by, bar_w, bar_h), border_radius=4)
 
     def _draw_analyzing_overlay(self, progress: float) -> None:
-        cx = config.DISPLAY_WIDTH // 2
+        cx = config.DISPLAY_WIDTH  // 2
         cy = config.DISPLAY_HEIGHT // 2
 
-        msg = self._fonts["large"].render("Analyzing your swing...", True, config.COLOR_TEXT)
+        msg = self._fonts["large"].render("Analyzing your swing…", True, config.COLOR_TEXT)
         self.surface.blit(msg, (cx - msg.get_width() // 2, cy - 80))
 
-        # Progress bar
-        bar_w = 600
-        bar_h = 12
-        bx = cx - bar_w // 2
-        by = cy
+        bar_w  = 600
+        bar_h  = 12
+        bx     = cx - bar_w // 2
+        by     = cy
         pygame.draw.rect(self.surface, config.COLOR_BORDER, (bx, by, bar_w, bar_h), border_radius=6)
         fill_w = int(bar_w * max(0, min(1, progress)))
         if fill_w > 0:
             pygame.draw.rect(self.surface, config.COLOR_ACCENT, (bx, by, fill_w, bar_h), border_radius=6)
 
-        pct = self._fonts["medium"].render(f"{int(progress * 100)}%", True, config.COLOR_TEXT_DIM)
+        pct = self._fonts["medium"].render(
+            f"{int(progress * 100)}%", True, config.COLOR_TEXT_DIM
+        )
         self.surface.blit(pct, (cx - pct.get_width() // 2, by + bar_h + 12))
 
         sub = self._fonts["small"].render(
-            "This takes about 30-60 seconds. Step back and get ready for your next shot.",
-            True, config.COLOR_TEXT_DIM
+            "This takes about 30–60 seconds. Step back and get ready for your next shot.",
+            True, config.COLOR_TEXT_DIM,
         )
         self.surface.blit(sub, (cx - sub.get_width() // 2, cy + 80))
 
     def _drain_events(self) -> list[str]:
-        """Process pygame events and return named event strings."""
+        """Drain all pygame events and return named event strings.
+        Used in all states except REVIEW (which has its own drain loop).
+        """
         events = []
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 events.append("QUIT")
             elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
-                    events.append("QUIT")
-                elif event.key == pygame.K_SPACE:
-                    events.append("SPACE")
-                elif event.key == pygame.K_r:
-                    events.append("REPLAY")
-                elif event.key == pygame.K_n:
-                    events.append("NEW_SWING")
-                elif event.key == pygame.K_s:
-                    events.append("SAVE")
-                elif event.key == pygame.K_COMMA:
-                    events.append("SPEED_DOWN")
-                elif event.key == pygame.K_PERIOD:
-                    events.append("SPEED_UP")
+                if   event.key == pygame.K_ESCAPE: events.append("QUIT")
+                elif event.key == pygame.K_SPACE:  events.append("SPACE")
+                elif event.key == pygame.K_r:      events.append("REPLAY")
+                elif event.key == pygame.K_n:      events.append("NEW_SWING")
+                elif event.key == pygame.K_s:      events.append("SAVE")
+        return events
+
+    def _extract_review_kb_events(self, raw_events: list) -> list[str]:
+        """Map raw pygame events to review-mode named event strings.
+        Called after pygame.event.get() has already been called for this frame.
+        """
+        events = []
+        for event in raw_events:
+            if event.type == pygame.QUIT:
+                events.append("QUIT")
+            elif event.type == pygame.KEYDOWN:
+                if   event.key == pygame.K_ESCAPE: events.append("QUIT")
+                elif event.key == pygame.K_SPACE:  events.append("PLAY_PAUSE")
+                elif event.key == pygame.K_LEFT:   events.append("STEP_BACK")
+                elif event.key == pygame.K_RIGHT:  events.append("STEP_FORWARD")
+                elif event.key == pygame.K_r:      events.append("REPLAY")
+                elif event.key == pygame.K_n:      events.append("NEW_SWING")
+                elif event.key == pygame.K_s:      events.append("SAVE")
         return events
 
 
@@ -270,11 +288,9 @@ class Screen:
 def _load_fonts() -> dict:
     pygame.font.init()
     try:
-        def f(size):
-            return pygame.font.SysFont("liberationsans", size)
+        def f(size): return pygame.font.SysFont("liberationsans", size)
     except Exception:
-        def f(size):
-            return pygame.font.Font(None, size)
+        def f(size): return pygame.font.Font(None, size)
     return {
         "title":  f(28),
         "large":  f(36),
@@ -291,6 +307,6 @@ def _bgr_to_pygame(
     target_h: int,
 ) -> pygame.Surface:
     """Convert a BGR numpy frame to a scaled pygame Surface."""
-    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    rgb     = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
     resized = cv2.resize(rgb, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
     return pygame.surfarray.make_surface(np.transpose(resized, (1, 0, 2)))

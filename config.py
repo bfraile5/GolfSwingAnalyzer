@@ -36,6 +36,16 @@ VIDEO_CELL_WIDTH = DISPLAY_WIDTH // 2  # 960
 VIDEO_DISPLAY_WIDTH = 720
 VIDEO_DISPLAY_HEIGHT = 540
 
+# ── Review-mode layout (VIDEO_AREA_HEIGHT is split into these three sections) ──
+TIMELINE_HEIGHT     = 70   # P1–P10 scrub bar
+P_DETAIL_HEIGHT     = 90   # per-position body-angle detail strip
+REVIEW_VIDEO_HEIGHT = (
+    DISPLAY_HEIGHT - HEADER_HEIGHT
+    - TIMELINE_HEIGHT - P_DETAIL_HEIGHT
+    - METRICS_HEIGHT - CONTROLS_HEIGHT
+)  # 1080 - 60 - 70 - 90 - 150 - 60 = 650
+# Sanity: REVIEW_VIDEO_HEIGHT + TIMELINE_HEIGHT + P_DETAIL_HEIGHT == VIDEO_AREA_HEIGHT (810)
+
 # ── Colors (dark sports-display theme) ───────────────────────────────────────
 COLOR_BG           = (26,  26,  46)    # #1a1a2e dark navy
 COLOR_PANEL        = (22,  33,  62)    # #16213e header/panel bg

@@ -36,7 +36,8 @@ class MetricsPanel:
         pygame.draw.line(surface, config.COLOR_BORDER, (0, y), (w, y), 1)
 
         n = len(METRIC_DEFS)
-        card_w = (w - 200) // n   # reserve 200px on right for overall score
+        # Reserve 400px on right: 190px for tempo + 10px gap + 190px for overall
+        card_w = (w - 400) // n
         card_h = h - 20
         card_y = y + 10
 
@@ -46,8 +47,11 @@ class MetricsPanel:
             cx = i * card_w + 10
             self._draw_card(surface, cx, card_y, card_w - 10, card_h, name, score, tip)
 
+        # Tempo box
+        self._draw_tempo(surface, w - 400, card_y, 190, card_h)
+
         # Overall score on the right
-        self._draw_overall(surface, w - 190, card_y, 180, card_h)
+        self._draw_overall(surface, w - 200, card_y, 190, card_h)
 
     # ── Private ────────────────────────────────────────────────────────────────
 
@@ -92,6 +96,49 @@ class MetricsPanel:
             if tip_surf.get_width() > inner_w:
                 tip_surf = tip_surf.subsurface((0, 0, inner_w, tip_surf.get_height()))
             surface.blit(tip_surf, (inner_x, iy))
+
+    def _draw_tempo(
+        self, surface: pygame.Surface,
+        x: int, y: int, w: int, h: int,
+    ) -> None:
+        ratio = self.metrics.tempo_ratio
+        bs = self.metrics.backswing_duration
+        ds = self.metrics.downswing_duration
+
+        # Color based on proximity to 3.0 target
+        if config.TEMPO_GREEN_MIN <= ratio <= config.TEMPO_GREEN_MAX:
+            color = config.COLOR_GOOD
+        elif config.TEMPO_AMBER_MIN <= ratio <= config.TEMPO_AMBER_MAX:
+            color = config.COLOR_WARN
+        elif ratio > 0:
+            color = config.COLOR_BAD
+        else:
+            color = config.COLOR_TEXT_DIM
+
+        pygame.draw.rect(surface, config.COLOR_BORDER, (x, y, w, h), border_radius=8)
+        pygame.draw.rect(surface, (30, 30, 55), (x + 1, y + 1, w - 2, h - 2), border_radius=8)
+
+        label = self._fonts["small"].render("TEMPO", True, config.COLOR_TEXT_DIM)
+        surface.blit(label, (x + (w - label.get_width()) // 2, y + 8))
+
+        if ratio > 0:
+            ratio_str = f"{ratio:.1f}:1"
+        else:
+            ratio_str = "—"
+        big = self._fonts["score"].render(ratio_str, True, color)
+        surface.blit(big, (x + (w - big.get_width()) // 2, y + 30))
+
+        # Backswing / downswing times
+        iy = y + 30 + big.get_height() + 4
+        if ratio > 0:
+            bs_surf = self._fonts["small"].render(f"BS {bs:.2f}s", True, config.COLOR_TEXT_DIM)
+            ds_surf = self._fonts["small"].render(f"DS {ds:.2f}s", True, config.COLOR_TEXT_DIM)
+            surface.blit(bs_surf, (x + (w - bs_surf.get_width()) // 2, iy))
+            surface.blit(ds_surf, (x + (w - ds_surf.get_width()) // 2, iy + bs_surf.get_height() + 2))
+            iy += bs_surf.get_height() * 2 + 6
+
+        target_surf = self._fonts["small"].render(f"Target 3.0:1", True, config.COLOR_TEXT_DIM)
+        surface.blit(target_surf, (x + (w - target_surf.get_width()) // 2, iy))
 
     def _draw_overall(
         self, surface: pygame.Surface,

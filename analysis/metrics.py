@@ -32,6 +32,11 @@ class SwingMetrics:
     head_stddev: float = 0.0
     arm_extension_deg: float = 0.0
 
+    # Tempo
+    backswing_duration: float = 0.0   # seconds, P1→P4
+    downswing_duration: float = 0.0   # seconds, P4→P7
+    tempo_ratio: float = 0.0          # backswing / downswing
+
     tips: dict = field(default_factory=dict)
 
 
@@ -63,6 +68,8 @@ def compute_metrics(
     plane_angle, m.swing_plane_score = _swing_plane(
         results_cam2, phases.p1, phases.p4)
     m.tips["Swing Plane"] = _plane_tip(plane_angle)
+
+    m.backswing_duration, m.downswing_duration, m.tempo_ratio = _tempo(phases)
 
     scores = [
         m.spine_angle_score, m.hip_rotation_score, m.knee_flex_score,
@@ -436,6 +443,19 @@ def _swing_plane(results, address_idx, backswing_top_idx):
     angle = abs(math.degrees(math.atan2(direction[1], direction[0])))
     score = _tolerance_score(angle, 50.0, 15.0)
     return round(angle, 1), score
+
+
+# ── Tempo ─────────────────────────────────────────────────────────────────────
+
+def _tempo(phases: SwingPhases) -> tuple:
+    """Return (backswing_s, downswing_s, ratio) using TARGET_FPS for conversion."""
+    backswing_frames = phases.p4 - phases.p1
+    downswing_frames = phases.p7 - phases.p4
+    if backswing_frames <= 0 or downswing_frames <= 0:
+        return 0.0, 0.0, 0.0
+    bs = backswing_frames / config.TARGET_FPS
+    ds = downswing_frames / config.TARGET_FPS
+    return round(bs, 2), round(ds, 2), round(bs / ds, 2)
 
 
 # ── Tip text ──────────────────────────────────────────────────────────────────

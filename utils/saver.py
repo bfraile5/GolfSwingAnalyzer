@@ -54,6 +54,12 @@ def _write_report(metrics, phases, swing_analysis, path: str) -> None:
             "arm_extension":  metrics.arm_extension_score,
             "swing_plane":    metrics.swing_plane_score,
         },
+        "tempo": {
+            "ratio":              round(metrics.tempo_ratio, 2),
+            "backswing_duration_s": round(metrics.backswing_duration, 2),
+            "downswing_duration_s": round(metrics.downswing_duration, 2),
+            "target":             3.0,
+        },
         "raw_values": {
             "spine_angle_deg":  metrics.spine_angle_deg,
             "hip_rotation_deg": metrics.hip_rotation_deg,

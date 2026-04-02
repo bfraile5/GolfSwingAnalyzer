@@ -73,5 +73,13 @@ HEAD_STABILITY_MAX_STDDEV = 0.04   # normalised coords; lower = better
 # Drop to 15 FPS for pose analysis to speed up processing
 ANALYSIS_SAMPLE_FPS = 15
 
+# ── Swing tempo ───────────────────────────────────────────────────────────────
+# Tempo = backswing duration / downswing duration  (tour average ≈ 3.0)
+TEMPO_TARGET = 3.0
+TEMPO_GREEN_MIN = 2.7    # green band (2.7–3.3)
+TEMPO_GREEN_MAX = 3.3
+TEMPO_AMBER_MIN = 2.5    # amber band: outside green but within ~17%
+TEMPO_AMBER_MAX = 3.5
+
 # ── Save directory ────────────────────────────────────────────────────────────
 SAVE_DIR = "/home/brian/GolfSwings"

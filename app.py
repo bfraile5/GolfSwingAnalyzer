@@ -258,6 +258,7 @@ class App:
             self._results_queue.put(report)
             self._analysis_progress = 1.0
             print(f"[Analysis] Done — overall score: {metrics.overall_score}")
+            print(f"[Analysis] Tempo: {metrics.tempo_ratio:.2f}:1  (BS {metrics.backswing_duration:.2f}s / DS {metrics.downswing_duration:.2f}s)")
             print(f"[Analysis] Address: {swing_analysis.address_evaluation}")
             print(f"[Analysis] Backswing: {swing_analysis.backswing_evaluation}")
             print(f"[Analysis] Transition: {swing_analysis.transition_evaluation}")

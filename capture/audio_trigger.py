@@ -28,6 +28,7 @@ class AudioTrigger:
         self._last_trigger = 0.0
         self._stream = None
         self._active = False
+        self.trigger_timestamp: float | None = None
         self.available = _SD_AVAILABLE
 
     # ── Public API ─────────────────────────────────────────────────────────────
@@ -84,5 +85,6 @@ class AudioTrigger:
                 self._fire()
 
     def _fire(self) -> None:
-        self._last_trigger = time.monotonic()
+        self.trigger_timestamp = time.monotonic()
+        self._last_trigger = self.trigger_timestamp
         self.trigger_event.set()

@@ -36,6 +36,7 @@ class SwingReport:
     frames_cam2: list
     phases: object
     metrics: object
+    impact_frame_idx: int = 0
     timestamp: float = field(default_factory=time.time)
 
 
@@ -58,6 +59,7 @@ class App:
 
         # Audio trigger
         self._audio = AudioTrigger(self._trigger_event)
+        self._trigger_timestamp: float = 0.0
 
         # Analysis output queue
         self._results_queue: queue.Queue[SwingReport] = queue.Queue()
@@ -129,6 +131,7 @@ class App:
         # Check for trigger
         if self._trigger_event.is_set():
             self._trigger_event.clear()
+            self._trigger_timestamp = self._audio.trigger_timestamp or time.monotonic()
             self._cam_stop_event.set()   # tells capture thread to wind down
             self._audio.stop()
             self._state = AppState.TRIGGERED
@@ -208,6 +211,11 @@ class App:
             clip0 = self._buf0.snapshot()
             clip2 = self._buf2.snapshot()
 
+            # Find impact frame index (frame closest to trigger timestamp)
+            impact_frame_idx = 0
+            if self._trigger_timestamp and clip0:
+                impact_frame_idx = min(range(len(clip0)), key=lambda i: abs(clip0[i][0] - self._trigger_timestamp))
+
             if not clip0 and not clip2:
                 print("[Analysis] No frames captured — aborting")
                 self._results_queue.put(self._empty_report())
@@ -242,6 +250,7 @@ class App:
                 frames_cam2=annotated2,
                 phases=phases,
                 metrics=metrics,
+                impact_frame_idx=impact_frame_idx,
             )
             self._results_queue.put(report)
             self._analysis_progress = 1.0

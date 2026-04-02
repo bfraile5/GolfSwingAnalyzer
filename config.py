@@ -1,10 +1,10 @@
 # ── Camera ────────────────────────────────────────────────────────────────────
 CAM0_INDEX = 0          # Face-on camera
 CAM2_INDEX = 2          # Down-the-line camera
-CAPTURE_WIDTH = 640
-CAPTURE_HEIGHT = 480
-TARGET_FPS = 30
-BUFFER_SECONDS = 10.0
+CAPTURE_WIDTH = 1280
+CAPTURE_HEIGHT = 720
+TARGET_FPS = 60
+BUFFER_SECONDS = 6.0
 POST_TRIGGER_SECONDS = 3.0
 
 # ── Audio ─────────────────────────────────────────────────────────────────────

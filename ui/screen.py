@@ -83,6 +83,35 @@ class Screen:
         self._record_pulse += 0.08
         return self._drain_events()
 
+    def render_countdown(
+        self,
+        seconds_remaining: float,
+        frame0: np.ndarray | None,
+        frame2: np.ndarray | None,
+    ) -> list[str]:
+        """Render countdown overlay on top of the live dual-camera preview."""
+        self.surface.fill(config.COLOR_BG)
+        self._draw_header("Golf Swing Analyzer", "GET READY", config.COLOR_WARN)
+        self._draw_dual_preview(frame0, frame2)
+        self._draw_countdown_overlay(seconds_remaining)
+        pygame.display.flip()
+        self._clock.tick(config.RENDER_FPS)
+        return self._drain_events()
+
+    def render_manual_recording(
+        self,
+        elapsed: float,
+        total: float,
+    ) -> list[str]:
+        """Render the 'Recording…' screen during manual 10-second capture."""
+        self.surface.fill(config.COLOR_BG)
+        self._draw_header("Golf Swing Analyzer", "RECORDING", config.COLOR_RECORD_DOT)
+        self._draw_manual_recording_overlay(elapsed, total)
+        pygame.display.flip()
+        self._clock.tick(config.RENDER_FPS)
+        self._record_pulse += 0.08
+        return self._drain_events()
+
     def render_analyzing(self, progress: float) -> list[str]:
         self.surface.fill(config.COLOR_BG)
         self._draw_header("Golf Swing Analyzer", "ANALYZING", config.COLOR_WARN)
@@ -248,6 +277,76 @@ class Screen:
         )
         self.surface.blit(sub, (cx - sub.get_width() // 2, cy + 80))
 
+    def _draw_countdown_overlay(self, seconds_remaining: float) -> None:
+        """Large countdown number centred on a semi-transparent dark overlay."""
+        overlay = pygame.Surface(
+            (config.DISPLAY_WIDTH, config.DISPLAY_HEIGHT), pygame.SRCALPHA
+        )
+        overlay.fill((0, 0, 0, 160))
+        self.surface.blit(overlay, (0, 0))
+
+        cx = config.DISPLAY_WIDTH  // 2
+        cy = config.DISPLAY_HEIGHT // 2
+
+        if seconds_remaining > 0:
+            label = str(math.ceil(seconds_remaining))
+            color = config.COLOR_TEXT
+        else:
+            label = "GO!"
+            color = config.COLOR_GOOD
+
+        num_surf = self._fonts["huge"].render(label, True, color)
+        self.surface.blit(
+            num_surf,
+            (cx - num_surf.get_width() // 2, cy - num_surf.get_height() // 2),
+        )
+
+        hint = self._fonts["large"].render(
+            "Walk up, set up, and swing", True, config.COLOR_TEXT_DIM
+        )
+        self.surface.blit(
+            hint,
+            (cx - hint.get_width() // 2,
+             cy + num_surf.get_height() // 2 + 24),
+        )
+
+    def _draw_manual_recording_overlay(self, elapsed: float, total: float) -> None:
+        """'Recording… Xs remaining' progress display for manual capture."""
+        cx = config.DISPLAY_WIDTH  // 2
+        cy = config.DISPLAY_HEIGHT // 2
+
+        # Pulsing REC dot
+        alpha    = int(128 + 127 * math.sin(self._record_pulse))
+        dot_surf = pygame.Surface((24, 24), pygame.SRCALPHA)
+        pygame.draw.circle(dot_surf, (*config.COLOR_RECORD_DOT, alpha), (12, 12), 12)
+
+        rec_surf  = self._fonts["large"].render("Recording…", True, config.COLOR_TEXT)
+        dot_x     = cx - rec_surf.get_width() // 2 - 36
+        dot_y     = cy - 44
+        self.surface.blit(dot_surf, (dot_x, dot_y))
+        self.surface.blit(rec_surf, (cx - rec_surf.get_width() // 2, cy - 40))
+
+        remaining = max(0.0, total - elapsed)
+        time_surf = self._fonts["large"].render(
+            f"{remaining:.1f}s remaining", True, config.COLOR_TEXT_DIM
+        )
+        self.surface.blit(time_surf, (cx - time_surf.get_width() // 2, cy + 20))
+
+        # Progress bar
+        bar_w = 600
+        bar_h = 12
+        bx    = cx - bar_w // 2
+        by    = cy + 80
+        pygame.draw.rect(
+            self.surface, config.COLOR_BORDER, (bx, by, bar_w, bar_h), border_radius=6
+        )
+        fill_w = int(bar_w * min(1.0, elapsed / total)) if total > 0 else 0
+        if fill_w > 0:
+            pygame.draw.rect(
+                self.surface, config.COLOR_RECORD_DOT,
+                (bx, by, fill_w, bar_h), border_radius=6
+            )
+
     def _drain_events(self) -> list[str]:
         """Drain all pygame events and return named event strings.
         Used in all states except REVIEW (which has its own drain loop).
@@ -292,6 +391,7 @@ def _load_fonts() -> dict:
     except Exception:
         def f(size): return pygame.font.Font(None, size)
     return {
+        "huge":   f(180),
         "title":  f(28),
         "large":  f(36),
         "medium": f(22),

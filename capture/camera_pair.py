@@ -27,6 +27,7 @@ class CameraPair:
         self.buf0 = buf0
         self.buf2 = buf2
         self.stop_event = stop_event
+        self._immediate_stop = threading.Event()
         self.cap0: cv2.VideoCapture | None = None
         self.cap2: cv2.VideoCapture | None = None
         self._error: str | None = None
@@ -77,6 +78,10 @@ class CameraPair:
             if ok2 and frame2 is not None:
                 self.buf2.append(frame2)
 
+            # Immediate stop (manual-trigger countdown path)
+            if self._immediate_stop.is_set():
+                break
+
             # Handle post-trigger countdown
             if self.stop_event.is_set():
                 if not triggered:
@@ -90,6 +95,50 @@ class CameraPair:
             sleep_time = frame_interval - elapsed
             if sleep_time > 0:
                 time.sleep(sleep_time)
+
+    def immediate_stop(self) -> None:
+        """Signal run() to exit on the next frame, without post-trigger delay."""
+        self._immediate_stop.set()
+
+    def record_fixed(
+        self, n_seconds: float
+    ) -> tuple[list[tuple[float, np.ndarray]], list[tuple[float, np.ndarray]]]:
+        """Capture exactly n_seconds of frames from the already-open cameras.
+
+        Returns (frames_cam0, frames_cam2) as lists of (timestamp, bgr_frame).
+        Must be called after run() has exited (i.e. after immediate_stop() +
+        thread join) so both threads are not competing for the same caps.
+        """
+        if self.cap0 is None or self.cap2 is None:
+            return [], []
+
+        frames0: list[tuple[float, np.ndarray]] = []
+        frames2: list[tuple[float, np.ndarray]] = []
+        frame_interval = 1.0 / config.TARGET_FPS
+        end_time = time.monotonic() + n_seconds
+
+        while time.monotonic() < end_time:
+            t_start = time.monotonic()
+
+            grabbed0 = self.cap0.grab()
+            grabbed2 = self.cap2.grab()
+
+            if grabbed0 and grabbed2:
+                ok0, frame0 = self.cap0.retrieve()
+                ok2, frame2 = self.cap2.retrieve()
+                ts = time.monotonic()
+                if ok0 and frame0 is not None:
+                    frames0.append((ts, frame0))
+                if ok2 and frame2 is not None:
+                    frames2.append((ts, frame2))
+
+            elapsed = time.monotonic() - t_start
+            sleep_time = frame_interval - elapsed
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+
+        print(f"[CameraPair] record_fixed: captured {len(frames0)} / {len(frames2)} frames")
+        return frames0, frames2
 
     def release(self) -> None:
         if self.cap0:

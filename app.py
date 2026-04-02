@@ -23,11 +23,13 @@ ANALYSIS_WATCHDOG_SECONDS = 180  # increased for full-frame processing
 
 
 class AppState(Enum):
-    SPLASH     = auto()
-    BUFFERING  = auto()
-    TRIGGERED  = auto()
-    ANALYZING  = auto()
-    REVIEW     = auto()
+    SPLASH           = auto()
+    BUFFERING        = auto()
+    COUNTDOWN        = auto()   # spacebar pressed — counting down before recording
+    MANUAL_RECORDING = auto()   # 10-second fixed capture after countdown
+    TRIGGERED        = auto()
+    ANALYZING        = auto()
+    REVIEW           = auto()
 
 
 @dataclass
@@ -72,6 +74,13 @@ class App:
         # Analysis watchdog
         self._analysis_start_time: float = 0.0
 
+        # Manual-trigger (spacebar) state
+        self._countdown_start: float = 0.0
+        self._manual_record_start: float = 0.0
+        self._manual_record_done = threading.Event()
+        self._manual_frames_cam0: list = []
+        self._manual_frames_cam2: list = []
+
         # Screen (initialised last so pygame starts once everything is ready)
         self._screen = Screen()
 
@@ -105,6 +114,12 @@ class App:
     def _tick(self, dt_ms: float) -> None:
         if self._state == AppState.BUFFERING:
             self._tick_buffering()
+
+        elif self._state == AppState.COUNTDOWN:
+            self._tick_countdown()
+
+        elif self._state == AppState.MANUAL_RECORDING:
+            self._tick_manual_recording()
 
         elif self._state == AppState.TRIGGERED:
             if not self._cam_thread.is_alive():
@@ -160,6 +175,85 @@ class App:
         except queue.Empty:
             pass
 
+    def _start_countdown(self) -> None:
+        """Begin the manual-trigger countdown (called on SPACE in BUFFERING)."""
+        self._countdown_start = time.monotonic()
+        self._state = AppState.COUNTDOWN
+
+    def _tick_countdown(self) -> None:
+        elapsed    = time.monotonic() - self._countdown_start
+        remaining  = config.MANUAL_COUNTDOWN_SECONDS - elapsed
+        frame0     = self._buf0.latest_frame()
+        frame2     = self._buf2.latest_frame()
+        events     = self._screen.render_countdown(remaining, frame0, frame2)
+        self._handle_global_events(events)
+
+        # Hold "GO!" on screen for one extra second before switching
+        if elapsed >= config.MANUAL_COUNTDOWN_SECONDS + 0.5:
+            self._start_manual_recording()
+
+    def _start_manual_recording(self) -> None:
+        """Stop the rolling-buffer cam thread and begin 10-second fixed capture."""
+        print("[App] Starting manual recording")
+        self._audio.stop()
+        self._cameras.immediate_stop()
+        self._cam_thread.join(timeout=2.0)   # wait for run() to exit
+
+        self._manual_record_done.clear()
+        self._manual_frames_cam0 = []
+        self._manual_frames_cam2 = []
+        self._manual_record_start = time.monotonic()
+
+        t = threading.Thread(
+            target=self._manual_record_worker, daemon=True, name="ManualRecordThread"
+        )
+        t.start()
+        self._state = AppState.MANUAL_RECORDING
+
+    def _tick_manual_recording(self) -> None:
+        elapsed = time.monotonic() - self._manual_record_start
+        events  = self._screen.render_manual_recording(elapsed, config.MANUAL_RECORD_SECONDS)
+        self._handle_global_events(events)
+
+        if self._manual_record_done.is_set():
+            print(f"[App] Manual recording done — {len(self._manual_frames_cam0)} frames")
+            self._analysis_start_time = time.monotonic()
+            self._analysis_progress   = 0.0
+            t = threading.Thread(
+                target=self._manual_analysis_worker, daemon=True, name="AnalysisThread"
+            )
+            t.start()
+            self._state = AppState.ANALYZING
+
+    def _manual_record_worker(self) -> None:
+        try:
+            frames0, frames2 = self._cameras.record_fixed(config.MANUAL_RECORD_SECONDS)
+            self._manual_frames_cam0 = frames0
+            self._manual_frames_cam2 = frames2
+        except Exception as e:
+            import traceback
+            print(f"[ManualRecord] Error: {e}")
+            traceback.print_exc()
+            self._manual_frames_cam0 = []
+            self._manual_frames_cam2 = []
+        finally:
+            self._manual_record_done.set()
+
+    def _manual_analysis_worker(self) -> None:
+        """Analysis worker for manually-triggered swings (no audio impact anchor)."""
+        try:
+            clip0 = self._manual_frames_cam0
+            clip2 = self._manual_frames_cam2
+            # No audio trigger — let detect_phases find impact from pose data
+            impact_frame_idx = 0
+            report = self._run_analysis_pipeline(clip0, clip2, impact_frame_idx)
+            self._results_queue.put(report)
+        except Exception as e:
+            import traceback
+            print(f"[ManualAnalysis] Error: {e}")
+            traceback.print_exc()
+            self._results_queue.put(self._empty_report())
+
     # ── Event handlers ─────────────────────────────────────────────────────────
 
     def _handle_global_events(self, events: list[str]) -> None:
@@ -168,7 +262,7 @@ class App:
                 self._running = False
             elif e == "SPACE":
                 if self._state == AppState.BUFFERING:
-                    self._audio.manual_trigger()
+                    self._start_countdown()
 
     def _handle_buffering_events(self, events: list[str]) -> None:
         self._handle_global_events(events)
@@ -210,6 +304,7 @@ class App:
         t.start()
 
     def _analysis_worker(self) -> None:
+        """Analysis worker for audio-triggered swings."""
         try:
             self._analysis_progress = 0.05
 
@@ -229,56 +324,66 @@ class App:
                 self._results_queue.put(self._empty_report())
                 return
 
-            self._analysis_progress = 0.10
-
-            # Process cam0 (face-on) — all frames with temporal smoothing
-            with PoseRunner() as runner0:
-                results0 = runner0.process_clip(clip0)
-            self._analysis_progress = 0.45
-
-            # Process cam2 (down-the-line) — all frames with temporal smoothing
-            with PoseRunner() as runner2:
-                results2 = runner2.process_clip(clip2)
-            self._analysis_progress = 0.75
-
-            # Detect P1–P10 positions (pass audio trigger frame to anchor P7)
-            phases = detect_phases(results0, impact_frame_idx=impact_frame_idx)
-
-            # Compute scorecard metrics (6 scores + overall)
-            metrics = compute_metrics(results0, results2, phases)
-
-            # Compute detailed P1–P10 position analysis
-            swing_analysis = compute_swing_analysis(results0, results2, phases)
-            self._analysis_progress = 0.85
-
-            # Annotate frames with skeleton overlay and phase labels
-            annotated0 = annotate_clip(clip0, results0, phases)
-            annotated2 = annotate_clip(clip2, results2, phases)
-            self._analysis_progress = 0.97
-
-            report = SwingReport(
-                frames_cam0=annotated0,
-                frames_cam2=annotated2,
-                phases=phases,
-                metrics=metrics,
-                swing_analysis=swing_analysis,
-                impact_frame_idx=impact_frame_idx,
-            )
+            report = self._run_analysis_pipeline(clip0, clip2, impact_frame_idx)
             self._results_queue.put(report)
-            self._analysis_progress = 1.0
-            print(f"[Analysis] Done — overall score: {metrics.overall_score}")
-            print(f"[Analysis] Tempo: {metrics.tempo_ratio:.2f}:1  (BS {metrics.backswing_duration:.2f}s / DS {metrics.downswing_duration:.2f}s)")
-            print(f"[Analysis] Address: {swing_analysis.address_evaluation}")
-            print(f"[Analysis] Backswing: {swing_analysis.backswing_evaluation}")
-            print(f"[Analysis] Transition: {swing_analysis.transition_evaluation}")
-            print(f"[Analysis] Impact: {swing_analysis.impact_evaluation}")
-            print(f"[Analysis] Follow-through: {swing_analysis.follow_through_evaluation}")
 
         except Exception as e:
             import traceback
             print(f"[Analysis] Error: {e}")
             traceback.print_exc()
             self._results_queue.put(self._empty_report())
+
+    def _run_analysis_pipeline(
+        self,
+        clip0: list,
+        clip2: list,
+        impact_frame_idx: int,
+    ) -> "SwingReport":
+        """Shared pose + metrics pipeline used by both trigger paths."""
+        self._analysis_progress = 0.10
+
+        # Process cam0 (face-on) — all frames with temporal smoothing
+        with PoseRunner() as runner0:
+            results0 = runner0.process_clip(clip0)
+        self._analysis_progress = 0.45
+
+        # Process cam2 (down-the-line) — all frames with temporal smoothing
+        with PoseRunner() as runner2:
+            results2 = runner2.process_clip(clip2)
+        self._analysis_progress = 0.75
+
+        # Detect P1–P10 positions
+        phases = detect_phases(results0, impact_frame_idx=impact_frame_idx)
+
+        # Compute scorecard metrics (6 scores + overall)
+        metrics = compute_metrics(results0, results2, phases)
+
+        # Compute detailed P1–P10 position analysis
+        swing_analysis = compute_swing_analysis(results0, results2, phases)
+        self._analysis_progress = 0.85
+
+        # Annotate frames with skeleton overlay and phase labels
+        annotated0 = annotate_clip(clip0, results0, phases)
+        annotated2 = annotate_clip(clip2, results2, phases)
+        self._analysis_progress = 0.97
+
+        report = SwingReport(
+            frames_cam0=annotated0,
+            frames_cam2=annotated2,
+            phases=phases,
+            metrics=metrics,
+            swing_analysis=swing_analysis,
+            impact_frame_idx=impact_frame_idx,
+        )
+        self._analysis_progress = 1.0
+        print(f"[Analysis] Done — overall score: {metrics.overall_score}")
+        print(f"[Analysis] Tempo: {metrics.tempo_ratio:.2f}:1  (BS {metrics.backswing_duration:.2f}s / DS {metrics.downswing_duration:.2f}s)")
+        print(f"[Analysis] Address: {swing_analysis.address_evaluation}")
+        print(f"[Analysis] Backswing: {swing_analysis.backswing_evaluation}")
+        print(f"[Analysis] Transition: {swing_analysis.transition_evaluation}")
+        print(f"[Analysis] Impact: {swing_analysis.impact_evaluation}")
+        print(f"[Analysis] Follow-through: {swing_analysis.follow_through_evaluation}")
+        return report
 
     def _empty_report(self) -> SwingReport:
         from analysis.metrics import SwingMetrics
@@ -300,6 +405,9 @@ class App:
         self._cam_stop_event.clear()
         self._analysis_progress = 0.0
         self._report = None
+        self._manual_record_done.clear()
+        self._manual_frames_cam0 = []
+        self._manual_frames_cam2 = []
 
         self._cameras = CameraPair(self._buf0, self._buf2, self._cam_stop_event)
         if not self._cameras.open():

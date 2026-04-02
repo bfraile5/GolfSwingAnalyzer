@@ -13,13 +13,13 @@ from capture.camera_pair import CameraPair
 from capture.audio_trigger import AudioTrigger
 from analysis.pose_runner import PoseRunner
 from analysis.phases import detect_phases
-from analysis.metrics import compute_metrics
+from analysis.metrics import compute_metrics, compute_swing_analysis
 from utils.annotations import annotate_clip
 from utils.saver import save_swing
 from ui.screen import Screen
 
 
-ANALYSIS_WATCHDOG_SECONDS = 120  # abort analysis if it takes longer than this
+ANALYSIS_WATCHDOG_SECONDS = 180  # increased for full-frame processing
 
 
 class AppState(Enum):
@@ -36,6 +36,7 @@ class SwingReport:
     frames_cam2: list
     phases: object
     metrics: object
+    swing_analysis: object = None
     impact_frame_idx: int = 0
     timestamp: float = field(default_factory=time.time)
 
@@ -82,7 +83,6 @@ class App:
         # Start cameras
         if not self._cameras.open():
             print(f"[App] Camera error: {self._cameras.error}")
-            # Continue anyway — screen will show placeholder
 
         self._cam_thread = threading.Thread(
             target=self._cameras.run, daemon=True, name="CaptureThread"
@@ -96,7 +96,6 @@ class App:
             now = time.monotonic()
             dt_ms = (now - last_time) * 1000
             last_time = now
-
             self._tick(dt_ms)
 
         self._shutdown()
@@ -108,7 +107,6 @@ class App:
             self._tick_buffering()
 
         elif self._state == AppState.TRIGGERED:
-            # Wait for capture thread to finish post-trigger frames
             if not self._cam_thread.is_alive():
                 self._state = AppState.ANALYZING
                 self._start_analysis()
@@ -128,11 +126,10 @@ class App:
             self._handle_global_events(events)
 
     def _tick_buffering(self) -> None:
-        # Check for trigger
         if self._trigger_event.is_set():
             self._trigger_event.clear()
             self._trigger_timestamp = self._audio.trigger_timestamp or time.monotonic()
-            self._cam_stop_event.set()   # tells capture thread to wind down
+            self._cam_stop_event.set()
             self._audio.stop()
             self._state = AppState.TRIGGERED
             return
@@ -145,7 +142,6 @@ class App:
         self._handle_buffering_events(events)
 
     def _tick_analyzing(self) -> None:
-        # Watchdog: abort if analysis hangs
         if (self._analysis_start_time > 0 and
                 time.monotonic() - self._analysis_start_time > ANALYSIS_WATCHDOG_SECONDS):
             print("[App] Analysis watchdog triggered — resetting")
@@ -214,33 +210,39 @@ class App:
             # Find impact frame index (frame closest to trigger timestamp)
             impact_frame_idx = 0
             if self._trigger_timestamp and clip0:
-                impact_frame_idx = min(range(len(clip0)), key=lambda i: abs(clip0[i][0] - self._trigger_timestamp))
+                impact_frame_idx = min(
+                    range(len(clip0)),
+                    key=lambda i: abs(clip0[i][0] - self._trigger_timestamp),
+                )
 
             if not clip0 and not clip2:
                 print("[Analysis] No frames captured — aborting")
                 self._results_queue.put(self._empty_report())
                 return
 
-            self._analysis_progress = 0.1
+            self._analysis_progress = 0.10
 
-            # Process cam0 for face-on metrics
+            # Process cam0 (face-on) — all frames with temporal smoothing
             with PoseRunner() as runner0:
                 results0 = runner0.process_clip(clip0)
             self._analysis_progress = 0.45
 
-            # Process cam2 for DTL metrics
+            # Process cam2 (down-the-line) — all frames with temporal smoothing
             with PoseRunner() as runner2:
                 results2 = runner2.process_clip(clip2)
-            self._analysis_progress = 0.80
+            self._analysis_progress = 0.75
 
-            # Detect swing phases from face-on
-            phases = detect_phases(results0)
+            # Detect P1–P10 positions (pass audio trigger frame to anchor P7)
+            phases = detect_phases(results0, impact_frame_idx=impact_frame_idx)
 
-            # Compute metrics
+            # Compute scorecard metrics (6 scores + overall)
             metrics = compute_metrics(results0, results2, phases)
-            self._analysis_progress = 0.88
 
-            # Annotate frames
+            # Compute detailed P1–P10 position analysis
+            swing_analysis = compute_swing_analysis(results0, results2, phases)
+            self._analysis_progress = 0.85
+
+            # Annotate frames with skeleton overlay and phase labels
             annotated0 = annotate_clip(clip0, results0, phases)
             annotated2 = annotate_clip(clip2, results2, phases)
             self._analysis_progress = 0.97
@@ -250,11 +252,17 @@ class App:
                 frames_cam2=annotated2,
                 phases=phases,
                 metrics=metrics,
+                swing_analysis=swing_analysis,
                 impact_frame_idx=impact_frame_idx,
             )
             self._results_queue.put(report)
             self._analysis_progress = 1.0
             print(f"[Analysis] Done — overall score: {metrics.overall_score}")
+            print(f"[Analysis] Address: {swing_analysis.address_evaluation}")
+            print(f"[Analysis] Backswing: {swing_analysis.backswing_evaluation}")
+            print(f"[Analysis] Transition: {swing_analysis.transition_evaluation}")
+            print(f"[Analysis] Impact: {swing_analysis.impact_evaluation}")
+            print(f"[Analysis] Follow-through: {swing_analysis.follow_through_evaluation}")
 
         except Exception as e:
             import traceback
@@ -268,8 +276,9 @@ class App:
         return SwingReport(
             frames_cam0=[],
             frames_cam2=[],
-            phases=SwingPhases(0, 0, 0, 0, 0),
+            phases=SwingPhases(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
             metrics=SwingMetrics(),
+            swing_analysis=None,
         )
 
     # ── Reset & Save ───────────────────────────────────────────────────────────
@@ -282,7 +291,6 @@ class App:
         self._analysis_progress = 0.0
         self._report = None
 
-        # Restart cameras
         self._cameras = CameraPair(self._buf0, self._buf2, self._cam_stop_event)
         if not self._cameras.open():
             print(f"[App] Camera reopen error: {self._cameras.error}")
@@ -304,6 +312,7 @@ class App:
                 self._report.frames_cam2,
                 self._report.metrics,
                 self._report.phases,
+                self._report.swing_analysis,
             )
             print(f"[App] Swing saved to {path}")
         except Exception as e:

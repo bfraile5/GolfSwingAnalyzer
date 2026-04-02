@@ -1,0 +1,12 @@
+# Golf Swing Analyzer — Python dependencies
+# Install with: pip install -r requirements.txt
+#
+# IMPORTANT: install order matters due to ABI compatibility:
+#   1. numpy must be 1.x (mediapipe constraint)
+#   2. opencv must be 4.10.x (built against numpy 1.x on aarch64)
+
+numpy==1.26.4
+opencv-contrib-python==4.10.0.84
+mediapipe==0.10.18
+pygame==2.6.1
+sounddevice==0.5.3

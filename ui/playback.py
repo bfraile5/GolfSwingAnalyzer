@@ -1,5 +1,6 @@
 """Video player for looping annotated swing clip playback, with timeline and P-detail."""
 from __future__ import annotations
+import time
 import pygame
 import numpy as np
 import cv2
@@ -35,8 +36,9 @@ class VideoPlayer:
         self._playing       = True
         self._speed         = 0.25   # default: quarter-speed for swing analysis
         self._frame_idx     = 0
-        self._accum_ms      = 0.0
-        self._frame_duration_ms = 1000.0 / config.TARGET_FPS
+        # Wall-clock playback anchor: set when play starts or is resumed/speed-changed
+        self._play_start_time: float = 0.0
+        self._play_start_frame: int  = 0
         self._fonts         = fonts or _default_fonts()
 
         # Scrub-bar rect — set on first draw so we can hit-test clicks
@@ -53,19 +55,32 @@ class VideoPlayer:
     # ── Public API ─────────────────────────────────────────────────────────────
 
     def update(self, dt_ms: float) -> None:
-        """Advance the frame pointer by elapsed time (no-op when paused)."""
+        """Advance the frame pointer using wall-clock time (no-op when paused).
+
+        Uses an absolute wall-clock anchor so playback speed is immune to
+        render framerate variations (critical on Pi where render fps varies).
+        At 0.25x with 60fps capture a 6-second clip plays back in 24 seconds.
+        """
         if not self._playing:
             return
-        self._accum_ms += dt_ms * self._speed
-        n = int(self._accum_ms / self._frame_duration_ms)
-        if n > 0:
-            self._accum_ms -= n * self._frame_duration_ms
-            self._frame_idx += n
-            if self._frame_idx >= self._total_frames:
-                if self._loop:
-                    self._frame_idx = 0
-                else:
-                    self._frame_idx = self._total_frames - 1
+        if self._play_start_time == 0.0:
+            self._reset_play_anchor()
+            return
+        elapsed = time.monotonic() - self._play_start_time
+        new_idx = self._play_start_frame + int(elapsed * config.TARGET_FPS * self._speed)
+        if new_idx >= self._total_frames:
+            if self._loop:
+                self._frame_idx = 0
+                self._reset_play_anchor()
+            else:
+                self._frame_idx = self._total_frames - 1
+        else:
+            self._frame_idx = new_idx
+
+    def _reset_play_anchor(self) -> None:
+        """Record current frame and wall-clock time as the playback anchor."""
+        self._play_start_time  = time.monotonic()
+        self._play_start_frame = self._frame_idx
 
     def handle_events(self, events: list) -> None:
         """Handle pre-drained pygame events (timeline seeks)."""
@@ -86,14 +101,18 @@ class VideoPlayer:
 
     def reset(self) -> None:
         self._frame_idx = 0
-        self._accum_ms  = 0.0
         self._playing   = True
+        self._reset_play_anchor()
 
     def set_speed(self, factor: float) -> None:
         self._speed = max(0.1, min(4.0, factor))
+        if self._playing:
+            self._reset_play_anchor()
 
     def toggle_play(self) -> None:
         self._playing = not self._playing
+        if self._playing:
+            self._reset_play_anchor()
 
     def step_forward(self, frames: int = 1) -> None:
         self._playing    = False

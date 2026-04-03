@@ -213,3 +213,87 @@ def _smooth_landmark_arrays(
             dst[:, lm_idx, 3] = vis_series
 
     return sm_norm, sm_world
+
+
+# ── Dual-camera pose fusion ────────────────────────────────────────────────────
+
+_HIGH_VIS = 0.7   # a camera is "trusted" for a landmark above this threshold
+_LOW_VIS  = 0.3   # a camera is "unreliable" for a landmark below this threshold
+
+
+def fuse_dual_camera_poses(
+    results_cam0: list[PoseResult],
+    results_cam2: list[PoseResult],
+) -> list[PoseResult]:
+    """Fuse smoothed pose results from two cameras to improve accuracy.
+
+    For each frame and each landmark:
+    - If one camera has high confidence (visibility > 0.7) and the other is low
+      (< 0.3), use the high-confidence camera exclusively.
+    - If both cameras are moderate, compute a weighted average by visibility.
+    - If both are zero or near-zero, fall back to cam0.
+
+    The face-on camera (cam0) provides better frontal cues (hips, shoulders
+    width, head position); the down-the-line camera (cam2) provides better
+    depth / Z information and lead-arm / club-plane visibility.
+
+    Fusion operates on the ``smoothed_norm`` and ``smoothed_world`` arrays
+    produced by temporal smoothing.  The raw MediaPipe ``landmarks`` from cam0
+    are preserved on the returned objects for skeleton overlay drawing.
+    The function is called AFTER temporal smoothing and BEFORE phase detection.
+    """
+    n = min(len(results_cam0), len(results_cam2))
+    if n == 0:
+        return list(results_cam0)
+
+    _zeros = np.zeros((_N_LANDMARKS, 4), dtype=np.float32)
+
+    fused: list[PoseResult] = []
+    for i in range(n):
+        r0 = results_cam0[i]
+        r2 = results_cam2[i]
+
+        norm0  = r0.smoothed_norm  if r0.smoothed_norm  is not None else _zeros
+        norm2  = r2.smoothed_norm  if r2.smoothed_norm  is not None else _zeros
+        world0 = r0.smoothed_world if r0.smoothed_world is not None else _zeros
+        world2 = r2.smoothed_world if r2.smoothed_world is not None else _zeros
+
+        fused_norm  = np.empty((_N_LANDMARKS, 4), dtype=np.float32)
+        fused_world = np.empty((_N_LANDMARKS, 4), dtype=np.float32)
+
+        for lm_idx in range(_N_LANDMARKS):
+            v0 = float(norm0[lm_idx, 3])
+            v2 = float(norm2[lm_idx, 3])
+
+            if v0 >= _HIGH_VIS and v2 <= _LOW_VIS:
+                fused_norm[lm_idx]  = norm0[lm_idx]
+                fused_world[lm_idx] = world0[lm_idx]
+            elif v2 >= _HIGH_VIS and v0 <= _LOW_VIS:
+                fused_norm[lm_idx]  = norm2[lm_idx]
+                fused_world[lm_idx] = world2[lm_idx]
+            else:
+                total = v0 + v2
+                if total < 1e-6:
+                    fused_norm[lm_idx]  = norm0[lm_idx]
+                    fused_world[lm_idx] = world0[lm_idx]
+                else:
+                    w0 = v0 / total
+                    w2 = v2 / total
+                    fused_norm[lm_idx]  = w0 * norm0[lm_idx]  + w2 * norm2[lm_idx]
+                    fused_world[lm_idx] = w0 * world0[lm_idx] + w2 * world2[lm_idx]
+
+        fused.append(PoseResult(
+            timestamp=r0.timestamp,
+            frame_index=r0.frame_index,
+            landmarks=r0.landmarks,          # keep cam0 raw landmarks for skeleton drawing
+            world_landmarks=r0.world_landmarks,
+            detected=r0.detected or r2.detected,
+            smoothed_norm=fused_norm,
+            smoothed_world=fused_world,
+        ))
+
+    # If cam0 has more frames than cam2, append the remaining cam0 frames unchanged
+    for i in range(n, len(results_cam0)):
+        fused.append(results_cam0[i])
+
+    return fused

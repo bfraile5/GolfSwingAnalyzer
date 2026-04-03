@@ -11,7 +11,7 @@ import config
 from capture.buffer import RollingBuffer
 from capture.camera_pair import CameraPair
 from capture.audio_trigger import AudioTrigger
-from analysis.pose_runner import PoseRunner
+from analysis.pose_runner import PoseRunner, fuse_dual_camera_poses
 from analysis.phases import detect_phases
 from analysis.metrics import compute_metrics, compute_swing_analysis
 from utils.annotations import annotate_clip
@@ -367,19 +367,23 @@ class App:
         # Process cam2 (down-the-line) — all frames with temporal smoothing
         with PoseRunner() as runner2:
             results2 = runner2.process_clip(clip2)
-        self._analysis_progress = 0.75
+        self._analysis_progress = 0.65
 
-        # Detect P1–P10 positions
-        phases = detect_phases(results0, impact_frame_idx=impact_frame_idx)
+        # Fuse dual-camera poses: for each landmark prefer the higher-confidence
+        # camera, or weighted-average when both are moderate.  Fusion happens
+        # AFTER temporal smoothing and BEFORE phase detection.
+        results_fused = fuse_dual_camera_poses(results0, results2)
+        self._analysis_progress = 0.70
 
-        # Compute scorecard metrics (6 scores + overall)
-        metrics = compute_metrics(results0, results2, phases)
+        # Detect P1–P10 positions using fused results
+        phases = detect_phases(results_fused, impact_frame_idx=impact_frame_idx)
 
-        # Compute detailed P1–P10 position analysis
-        swing_analysis = compute_swing_analysis(results0, results2, phases)
+        # Compute scorecard metrics and detailed position analysis from fused results
+        metrics = compute_metrics(results_fused, results_fused, phases)
+        swing_analysis = compute_swing_analysis(results_fused, results_fused, phases)
         self._analysis_progress = 0.85
 
-        # Annotate frames with skeleton overlay and phase labels
+        # Annotate frames with skeleton overlay using per-camera results (raw landmarks)
         annotated0 = annotate_clip(clip0, results0, phases)
         annotated2 = annotate_clip(clip2, results2, phases)
         self._analysis_progress = 0.97

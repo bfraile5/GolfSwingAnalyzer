@@ -43,6 +43,14 @@ class Screen:
         # Buffering view state
         self._record_pulse = 0.0
 
+        # Pre-allocated semi-transparent overlay for countdown (avoids per-frame
+        # 8 MB SRCALPHA allocation which is very slow / broken on Pi display drivers)
+        self._countdown_overlay = pygame.Surface(
+            (config.DISPLAY_WIDTH, config.DISPLAY_HEIGHT)
+        )
+        self._countdown_overlay.set_alpha(160)
+        self._countdown_overlay.fill((0, 0, 0))
+
     # ── Public API ─────────────────────────────────────────────────────────────
 
     def load_review(self, report) -> None:
@@ -279,11 +287,9 @@ class Screen:
 
     def _draw_countdown_overlay(self, seconds_remaining: float) -> None:
         """Large countdown number centred on a semi-transparent dark overlay."""
-        overlay = pygame.Surface(
-            (config.DISPLAY_WIDTH, config.DISPLAY_HEIGHT), pygame.SRCALPHA
-        )
-        overlay.fill((0, 0, 0, 160))
-        self.surface.blit(overlay, (0, 0))
+        # Use the pre-allocated overlay (set_alpha) instead of a per-frame
+        # SRCALPHA surface — the SRCALPHA path is slow/broken on Pi display drivers
+        self.surface.blit(self._countdown_overlay, (0, 0))
 
         cx = config.DISPLAY_WIDTH  // 2
         cy = config.DISPLAY_HEIGHT // 2
@@ -409,4 +415,7 @@ def _bgr_to_pygame(
     """Convert a BGR numpy frame to a scaled pygame Surface."""
     rgb     = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
     resized = cv2.resize(rgb, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
-    return pygame.surfarray.make_surface(np.transpose(resized, (1, 0, 2)))
+    # np.transpose returns a non-contiguous view; make_surface on older pygame/Pi
+    # requires a C-contiguous array, so force contiguous copy first.
+    arr = np.ascontiguousarray(np.transpose(resized, (1, 0, 2)))
+    return pygame.surfarray.make_surface(arr)

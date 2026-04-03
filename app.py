@@ -105,7 +105,15 @@ class App:
             now = time.monotonic()
             dt_ms = (now - last_time) * 1000
             last_time = now
-            self._tick(dt_ms)
+            try:
+                self._tick(dt_ms)
+            except Exception as exc:
+                import traceback
+                print(f"[App] Tick error in state {self._state}: {exc}")
+                traceback.print_exc()
+                # Don't crash the whole app on a transient render error;
+                # reset to BUFFERING so the user can try again.
+                self._reset_for_new_swing()
 
         self._shutdown()
 
@@ -179,6 +187,7 @@ class App:
         """Begin the manual-trigger countdown (called on SPACE in BUFFERING)."""
         self._countdown_start = time.monotonic()
         self._state = AppState.COUNTDOWN
+        print(f"[App] Countdown started — {config.MANUAL_COUNTDOWN_SECONDS}s")
 
     def _tick_countdown(self) -> None:
         elapsed    = time.monotonic() - self._countdown_start
@@ -188,8 +197,10 @@ class App:
         events     = self._screen.render_countdown(remaining, frame0, frame2)
         self._handle_global_events(events)
 
-        # Hold "GO!" on screen for one extra second before switching
-        if elapsed >= config.MANUAL_COUNTDOWN_SECONDS + 0.5:
+        # Re-sample elapsed AFTER render so the transition fires at the correct
+        # wall-clock time even if a frame took unusually long to draw (e.g. on Pi).
+        # Hold "GO!" on screen for one extra second before switching.
+        if time.monotonic() - self._countdown_start >= config.MANUAL_COUNTDOWN_SECONDS + 0.5:
             self._start_manual_recording()
 
     def _start_manual_recording(self) -> None:

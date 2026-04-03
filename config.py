@@ -92,8 +92,8 @@ TEMPO_AMBER_MIN = 2.5    # amber band: outside green but within ~17%
 TEMPO_AMBER_MAX = 3.5
 
 # ── Manual trigger (spacebar) ─────────────────────────────────────────────────
-MANUAL_COUNTDOWN_SECONDS = 5   # countdown before recording starts
-MANUAL_RECORD_SECONDS    = 10  # how long to record after countdown
+MANUAL_COUNTDOWN_SECONDS = 3   # countdown before recording starts
+MANUAL_RECORD_SECONDS    = 6   # how long to record after countdown
 
 # ── Save directory ────────────────────────────────────────────────────────────
 SAVE_DIR = "/home/brian/GolfSwings"

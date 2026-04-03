@@ -29,12 +29,15 @@ class VideoPlayer:
         swing_analysis=None,
         loop: bool = True,
         fonts: dict | None = None,
+        actual_fps: float = 0.0,
     ) -> None:
         self._phases        = phases
         self._swing_analysis = swing_analysis
         self._loop          = loop
         self._playing       = True
         self._speed         = 0.25   # default: quarter-speed for swing analysis
+        # Use measured capture fps; fall back to TARGET_FPS if not provided
+        self._actual_fps    = actual_fps if actual_fps > 0 else float(config.TARGET_FPS)
         self._frame_idx     = 0
         # Wall-clock playback anchor: set when play starts or is resumed/speed-changed
         self._play_start_time: float = 0.0
@@ -59,7 +62,8 @@ class VideoPlayer:
 
         Uses an absolute wall-clock anchor so playback speed is immune to
         render framerate variations (critical on Pi where render fps varies).
-        At 0.25x with 60fps capture a 6-second clip plays back in 24 seconds.
+        Uses actual measured capture fps so slow-mo timing is correct even when
+        the camera delivers fewer frames than TARGET_FPS (e.g. 15 fps actual).
         """
         if not self._playing:
             return
@@ -67,7 +71,7 @@ class VideoPlayer:
             self._reset_play_anchor()
             return
         elapsed = time.monotonic() - self._play_start_time
-        new_idx = self._play_start_frame + int(elapsed * config.TARGET_FPS * self._speed)
+        new_idx = self._play_start_frame + int(elapsed * self._actual_fps * self._speed)
         if new_idx >= self._total_frames:
             if self._loop:
                 self._frame_idx = 0

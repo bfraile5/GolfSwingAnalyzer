@@ -61,6 +61,7 @@ class Screen:
             report.phases,
             swing_analysis=report.swing_analysis,
             fonts=self._fonts,
+            actual_fps=report.actual_fps,
         )
         self._metrics_panel = MetricsPanel(report.metrics, self._fonts)
 

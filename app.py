@@ -40,6 +40,7 @@ class SwingReport:
     metrics: object
     swing_analysis: object = None
     impact_frame_idx: int = 0
+    actual_fps: float = 0.0   # measured capture fps; 0.0 = use config.TARGET_FPS
     timestamp: float = field(default_factory=time.time)
 
 
@@ -80,6 +81,7 @@ class App:
         self._manual_record_done = threading.Event()
         self._manual_frames_cam0: list = []
         self._manual_frames_cam2: list = []
+        self._manual_actual_fps: float = float(config.TARGET_FPS)
 
         # Screen (initialised last so pygame starts once everything is ready)
         self._screen = Screen()
@@ -238,9 +240,10 @@ class App:
 
     def _manual_record_worker(self) -> None:
         try:
-            frames0, frames2 = self._cameras.record_fixed(config.MANUAL_RECORD_SECONDS)
+            frames0, frames2, actual_fps = self._cameras.record_fixed(config.MANUAL_RECORD_SECONDS)
             self._manual_frames_cam0 = frames0
             self._manual_frames_cam2 = frames2
+            self._manual_actual_fps = actual_fps
         except Exception as e:
             import traceback
             print(f"[ManualRecord] Error: {e}")
@@ -257,7 +260,9 @@ class App:
             clip2 = self._manual_frames_cam2
             # No audio trigger — let detect_phases find impact from pose data
             impact_frame_idx = 0
-            report = self._run_analysis_pipeline(clip0, clip2, impact_frame_idx)
+            report = self._run_analysis_pipeline(
+                clip0, clip2, impact_frame_idx, self._manual_actual_fps
+            )
             self._results_queue.put(report)
         except Exception as e:
             import traceback
@@ -328,6 +333,17 @@ class App:
             clip0 = self._buf0.snapshot()
             clip2 = self._buf2.snapshot()
 
+            # Measure actual capture fps from buffer timestamps
+            if len(clip0) > 1:
+                buf_duration = clip0[-1][0] - clip0[0][0]
+                actual_fps = (len(clip0) - 1) / buf_duration if buf_duration > 0 else float(config.TARGET_FPS)
+                print(
+                    f"[Capture] Buffer has {len(clip0)} frames over {buf_duration:.1f}s"
+                    f" = {actual_fps:.1f} actual fps  (configured {config.TARGET_FPS} fps)"
+                )
+            else:
+                actual_fps = float(config.TARGET_FPS)
+
             # Find impact frame index (frame closest to trigger timestamp)
             impact_frame_idx = 0
             if self._trigger_timestamp and clip0:
@@ -341,7 +357,7 @@ class App:
                 self._results_queue.put(self._empty_report())
                 return
 
-            report = self._run_analysis_pipeline(clip0, clip2, impact_frame_idx)
+            report = self._run_analysis_pipeline(clip0, clip2, impact_frame_idx, actual_fps)
             self._results_queue.put(report)
 
         except Exception as e:
@@ -355,6 +371,7 @@ class App:
         clip0: list,
         clip2: list,
         impact_frame_idx: int,
+        actual_fps: float = 0.0,
     ) -> "SwingReport":
         """Shared pose + metrics pipeline used by both trigger paths."""
         self._analysis_progress = 0.10
@@ -395,6 +412,7 @@ class App:
             metrics=metrics,
             swing_analysis=swing_analysis,
             impact_frame_idx=impact_frame_idx,
+            actual_fps=actual_fps,
         )
         self._analysis_progress = 1.0
         print(f"[Analysis] Done — overall score: {metrics.overall_score}")
@@ -429,6 +447,7 @@ class App:
         self._manual_record_done.clear()
         self._manual_frames_cam0 = []
         self._manual_frames_cam2 = []
+        self._manual_actual_fps = float(config.TARGET_FPS)
 
         self._cameras = CameraPair(self._buf0, self._buf2, self._cam_stop_event)
         if not self._cameras.open():

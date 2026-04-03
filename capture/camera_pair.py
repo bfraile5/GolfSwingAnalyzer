@@ -102,20 +102,23 @@ class CameraPair:
 
     def record_fixed(
         self, n_seconds: float
-    ) -> tuple[list[tuple[float, np.ndarray]], list[tuple[float, np.ndarray]]]:
+    ) -> tuple[list[tuple[float, np.ndarray]], list[tuple[float, np.ndarray]], float]:
         """Capture exactly n_seconds of frames from the already-open cameras.
 
-        Returns (frames_cam0, frames_cam2) as lists of (timestamp, bgr_frame).
+        Returns (frames_cam0, frames_cam2, actual_fps).
+        actual_fps is measured from wall-clock time so playback uses the real
+        capture rate rather than the configured TARGET_FPS.
         Must be called after run() has exited (i.e. after immediate_stop() +
         thread join) so both threads are not competing for the same caps.
         """
         if self.cap0 is None or self.cap2 is None:
-            return [], []
+            return [], [], float(config.TARGET_FPS)
 
         frames0: list[tuple[float, np.ndarray]] = []
         frames2: list[tuple[float, np.ndarray]] = []
         frame_interval = 1.0 / config.TARGET_FPS
-        end_time = time.monotonic() + n_seconds
+        capture_start = time.monotonic()
+        end_time = capture_start + n_seconds
 
         while time.monotonic() < end_time:
             t_start = time.monotonic()
@@ -137,8 +140,13 @@ class CameraPair:
             if sleep_time > 0:
                 time.sleep(sleep_time)
 
-        print(f"[CameraPair] record_fixed: captured {len(frames0)} / {len(frames2)} frames")
-        return frames0, frames2
+        duration = time.monotonic() - capture_start
+        actual_fps = len(frames0) / duration if duration > 0 else float(config.TARGET_FPS)
+        print(
+            f"[Capture] Recorded {len(frames0)} frames in {duration:.1f}s"
+            f" = {actual_fps:.1f} actual fps  (configured {config.TARGET_FPS} fps)"
+        )
+        return frames0, frames2, actual_fps
 
     def release(self) -> None:
         if self.cap0:
@@ -160,4 +168,13 @@ class CameraPair:
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.CAPTURE_HEIGHT)
         cap.set(cv2.CAP_PROP_FPS, config.TARGET_FPS)
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # minimise latency
+        reported_fps = cap.get(cv2.CAP_PROP_FPS)
+        actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        print(
+            f"[Camera {index}] Opened — driver reports {reported_fps:.1f} fps"
+            f" at {actual_w}x{actual_h}"
+            f"  (requested {config.TARGET_FPS} fps"
+            f" {config.CAPTURE_WIDTH}x{config.CAPTURE_HEIGHT})"
+        )
         return cap

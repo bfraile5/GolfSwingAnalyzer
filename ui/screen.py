@@ -385,6 +385,10 @@ class Screen:
                 elif event.key == pygame.K_r:      events.append("REPLAY")
                 elif event.key == pygame.K_n:      events.append("NEW_SWING")
                 elif event.key == pygame.K_s:      events.append("SAVE")
+                elif event.key == pygame.K_1:      events.append("SPEED_025")
+                elif event.key == pygame.K_2:      events.append("SPEED_050")
+                elif event.key == pygame.K_3:      events.append("SPEED_100")
+                elif event.key == pygame.K_4:      events.append("SPEED_200")
         return events
 
 

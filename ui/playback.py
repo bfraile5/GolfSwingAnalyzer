@@ -33,7 +33,7 @@ class VideoPlayer:
         self._swing_analysis = swing_analysis
         self._loop          = loop
         self._playing       = True
-        self._speed         = 1.0
+        self._speed         = 0.25   # default: quarter-speed for swing analysis
         self._frame_idx     = 0
         self._accum_ms      = 0.0
         self._frame_duration_ms = 1000.0 / config.TARGET_FPS
@@ -246,14 +246,19 @@ class VideoPlayer:
             pts = [(ix, iy - 10), (ix, iy + 10), (ix + 18, iy)]
             pygame.draw.polygon(surface, config.COLOR_TEXT, pts)
 
-        # Frame counter (right margin)
+        # Speed indicator (right margin, top)
+        speed_label = f"{self._speed:.2g}x"
+        spd = self._fonts["small"].render(speed_label, True, config.COLOR_ACCENT)
+        surface.blit(spd, (tl_w - spd.get_width() - 10, tl_y + 6))
+
+        # Frame counter (right margin, bottom)
         fc = self._fonts["small"].render(
             f"{self._frame_idx + 1} / {self._total_frames}",
             True, config.COLOR_TEXT_DIM,
         )
         surface.blit(fc, (
             tl_w - fc.get_width() - 10,
-            tl_y + (tl_h - fc.get_height()) // 2,
+            tl_y + tl_h - fc.get_height() - 6,
         ))
 
     def _draw_p_detail(self, surface: pygame.Surface) -> None:

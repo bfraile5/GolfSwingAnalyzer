@@ -111,14 +111,16 @@ class ControlBar:
 
         # (label, event_name, width_px, accent)
         specs = [
-            ("◄◄",        "STEP_BACK",    80,  False),
-            ("▶ / ❚❚",    "PLAY_PAUSE",  110,  False),
-            ("►►",        "STEP_FORWARD",  80,  False),
-            ("½x",        "SPEED_HALF",    80,  False),
-            ("1x",        "SPEED_NORM",    80,  False),
-            ("↺ REPLAY",  "REPLAY",       130,  False),
-            ("NEW SWING", "NEW_SWING",    155,  False),
-            ("✓ SAVE",    "SAVE",         125,  True),
+            ("◄◄",        "STEP_BACK",     80,  False),
+            ("▶ / ❚❚",    "PLAY_PAUSE",   110,  False),
+            ("►►",        "STEP_FORWARD",   80,  False),
+            ("¼x",        "SPEED_025",      70,  False),
+            ("½x",        "SPEED_050",      70,  False),
+            ("1x",        "SPEED_100",      70,  False),
+            ("2x",        "SPEED_200",      70,  False),
+            ("↺ REPLAY",  "REPLAY",        130,  False),
+            ("NEW SWING", "NEW_SWING",     155,  False),
+            ("✓ SAVE",    "SAVE",          125,  True),
         ]
 
         total_w  = sum(w for _, _, w, _ in specs)

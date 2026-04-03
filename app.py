@@ -294,12 +294,18 @@ class App:
             elif e == "STEP_BACK":
                 if self._screen._player:
                     self._screen._player.step_back()
-            elif e == "SPEED_HALF":
+            elif e == "SPEED_025":
+                if self._screen._player:
+                    self._screen._player.set_speed(0.25)
+            elif e == "SPEED_050":
                 if self._screen._player:
                     self._screen._player.set_speed(0.5)
-            elif e == "SPEED_NORM":
+            elif e == "SPEED_100":
                 if self._screen._player:
                     self._screen._player.set_speed(1.0)
+            elif e == "SPEED_200":
+                if self._screen._player:
+                    self._screen._player.set_speed(2.0)
             elif e == "NEW_SWING":
                 self._reset_for_new_swing()
             elif e == "SAVE":
